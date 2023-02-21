@@ -1,12 +1,30 @@
+/// main.cpp
+/// Main dog-tracker file
+/// Created on: 21 Feb 2023
+/// Author: Mateusz Sznejkowski
+
+//////////////////////////////////
+//					 INCLUDES 					//
+//////////////////////////////////
 #include <Arduino.h>
 #include <Serial3.h>
 #include <TinyGPS++.h>
 
+//////////////////////////////////
+//			MACROS AND DEFINES			//
+//////////////////////////////////
 #define gps_serial Serial1
 #define sim_serial Serial3
 
-TinyGPSPlus gps; /// GPS
+#define GPS_BAUDRATE 9600
+#define SIM_BAUDRATE 9600
 
+#define PHONE_NUMER_SIZE 11
+#define BUFFER_SIZE 128
+
+//////////////////////////////////
+//					 TYPEDEFS 					//
+//////////////////////////////////
 typedef struct
 {
   double latitude;  /// Latitude in degrees
@@ -15,6 +33,21 @@ typedef struct
   uint32_t time;    /// Raw time in HHMMSSCC format
 } Packet;
 
+//////////////////////////////////
+//           VARIABLES          //
+//////////////////////////////////
+TinyGPSPlus gps; /// GPS
+
+unsigned long previousMillis = 0;
+unsigned long interval = 1000;
+bool is_data_requested = false;
+bool gps_ready = false;
+Packet packet = {0};
+char phone_number[PHONE_NUMER_SIZE + 1] = "";
+
+//////////////////////////////////
+//	STATIC FUNCTION PROTOTYPES	//
+//////////////////////////////////
 static void gps_serial_handler(void);
 static void sim_serial_handler(void);
 static void sim_send_sms(void);
@@ -22,28 +55,24 @@ static void sim_send_command(const char *command, uint8_t command_size, const ch
 static void init_sim(void);
 static void start_serial_with_pc(void);
 
-bool gps_ready = false;
-Packet packet = {0};
-unsigned long previousMillis = 0;
-unsigned long interval = 1000;
-bool is_data_requested = false;
-char phone_number[12] = "";
-
+//////////////////////////////////
+//       GLOBAL FUNCTIONS       //
+//////////////////////////////////
 /**
  * @brief Configuration
  */
-void setup()
+void setup(void)
 {
   start_serial_with_pc();
   init_sim();
-  gps_serial.begin(9600);
+  gps_serial.begin(GPS_BAUDRATE);
   Serial.println("Started!!!");
 }
 
 /**
  * @brief Main loop function
  */
-void loop()
+void loop(void)
 {
   unsigned long currentMillis = millis();
 
@@ -57,11 +86,14 @@ void loop()
       sim_send_sms();
     }
   }
-  gps_serial_handler();
 
+  gps_serial_handler();
   sim_serial_handler();
 }
 
+//////////////////////////////////
+//       STATIC FUNCTIONS       //
+//////////////////////////////////
 /**
  * @brief GY-GPS6MV2 serial handler
  */
@@ -94,7 +126,7 @@ static void sim_serial_handler(void)
     if (sms.indexOf("Start") > 0)
     {
       Serial.println("Requested location!");
-      strncpy(phone_number, sms.c_str() + 10, 11);
+      strncpy(phone_number, sms.c_str() + 10, PHONE_NUMER_SIZE);
       is_data_requested = true;
     }
     else
@@ -109,9 +141,10 @@ static void sim_serial_handler(void)
  */
 static void sim_send_sms(void)
 {
-  char request[128] = "";
-  char message[128] = "";
+  char request[BUFFER_SIZE] = "";
+  char message[BUFFER_SIZE] = "";
 
+  // SendS a command to SIM800L module to make it ready to send a message
   sprintf(request, "AT+CMGS=\"+%s\"", phone_number);
   sim_serial.println(request);
   delay(50);
@@ -120,6 +153,7 @@ static void sim_send_sms(void)
     Serial.write(sim_serial.read());
   }
 
+  // adds text to SMS message
   sprintf(message, "http://www.google.com/maps/place/%lf,%lf", packet.latitude, packet.longitude);
   sim_serial.print(message);
   delay(50);
@@ -128,7 +162,7 @@ static void sim_send_sms(void)
     Serial.write(sim_serial.read());
   }
 
-  sim_serial.write(26);
+  sim_serial.write(26); // write 26 to SIM800L to end sending SMS command
 
   Serial.println(request);
   Serial.println(message);
@@ -144,7 +178,7 @@ static void sim_send_command(const char *command, uint8_t command_size, const ch
   delay(50);
 
   // Reads serial character by character
-  char text[64] = "";
+  char text[BUFFER_SIZE] = "";
   uint8_t i = 0;
   while (sim_serial.available())
   {
@@ -153,6 +187,7 @@ static void sim_send_command(const char *command, uint8_t command_size, const ch
   }
 
   // /r/n<response>/r/n
+  // adding 2 characters to omit the newline character
   if (strncmp(text + 2, expected_response, expected_response_size) != 0)
   {
     Serial.println("SIM800L COMMAND ERROR!");
@@ -175,7 +210,7 @@ static void init_sim(void)
 {
   Serial.println("\rInitializing SIM800L...");
   Serial.println("Setting up Serial2...");
-  sim_serial.begin(9600);
+  sim_serial.begin(SIM_BAUDRATE);
 
   sim_send_command("ATE0", strlen("ATE0"), NULL, 0);                                      // Disable ECHO
   sim_send_command("AT", strlen("AT"), "OK", strlen("OK"));                               // Once the handshake test is successful, it will back to OK
@@ -203,38 +238,4 @@ static void start_serial_with_pc(void)
   }
 }
 
-// char char_array[7] = "";
-// strncpy(char_array, sms.c_str() + 49, 6);
-// if (strncmp(sms.c_str() + 49, "Start", 5) == 0)
-
-// uint16_t latitude_deg;  /// Latitude in degrees
-// uint32_t latitude_billionths; /// Longitude in degrees
-// uint16_t longitude_deg;
-// uint32_t longitude_billionths;
-
-// packet.latitude_deg = gps.location.rawLat().deg;
-// packet.latitude_billionths = gps.location.rawLat().billionths;
-// packet.longitude_deg = gps.location.rawLng().deg;
-// packet.longitude_billionths = gps.location.rawLng().billionths;
-
-// // Raw speed in 100ths of a knot (i32)
-// Serial.print("Raw speed in 100ths/knot = ");
-// Serial.println(gps.speed.value());
-// // Speed in knots (double)
-// Serial.print("Speed in knots/h = ");
-// Serial.println(gps.speed.knots());
-// // Speed in miles per hour (double)
-// Serial.print("Speed in miles/h = ");
-// Serial.println(gps.speed.mph());
-// // Speed in meters per second (double)
-// Serial.print("Speed in m/s = ");
-// Serial.println(gps.speed.mps());
-// // Speed in kilometers per hour (double)
-// Serial.print("Speed in km/h = ");
-// Serial.println(gps.speed.kmph());
-// // Raw course in 100ths of a degree (i32)
-// Serial.print("Raw course in degrees = ");
-// Serial.println(gps.course.value());
-// // Course in degrees (double)
-// Serial.print("Course in degrees = ");
-// Serial.println(gps.course.deg());
+/// (C) COPYRIGHT Mateusz Sznejkowski ///
